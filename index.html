@@ -4,169 +4,325 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Supervisor Controls</title>
-    <link rel="stylesheet" href="https://momentum-ui.com/api/v1/momentum-ui.css">
     <style>
-        body { font-family: 'CiscoSans', 'Segoe UI', sans-serif; padding: 20px; background-color: #f4f4f4; margin: 0; }
-        h3 { margin-top: 0; color: #333; }
-        .group-section { margin-bottom: 25px; border-left: 4px solid #007aa3; padding-left: 15px; background: rgba(255,255,255,0.5); padding: 10px 10px 10px 15px; border-radius: 0 4px 4px 0; }
-        .group-title { color: #555; margin: 0 0 10px 0; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; font-weight: 600; }
-        .variable-card { background: white; padding: 12px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-        .var-label { font-weight: 600; font-size: 14px; color: #222; }
-        .input-group { display: flex; gap: 10px; align-items: center; }
-        select, input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; width: 200px; }
-        button { background: #007aa3; color: white; border: none; padding: 7px 15px; border-radius: 18px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s; }
-        button:hover { background: #005f7a; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
-        #error-msg { color: #d63d00; background: #ffebe6; padding: 10px; border-radius: 4px; display: none; margin-bottom: 10px; }
+        body { margin: 0; padding: 0; background: transparent; font-family: 'Segoe UI', sans-serif; }
     </style>
 </head>
 <body>
 
-    <div id="app">
-        <h3>Supervisor Controls</h3>
-        <div id="error-msg"></div>
-        <global-variable-manager id="manager-widget"></global-variable-manager>
-    </div>
+    <global-variable-manager id="manager-widget"></global-variable-manager>
 
     <script>
-        class GlobalVariableManager extends HTMLElement {
-            constructor() {
-                super();
-                this.variables = [];
-                this.MAX_STRING_LENGTH = 256; 
-            }
-
-            static get observedAttributes() { return ['token', 'org-id', 'data-center']; }
-
-            attributeChangedCallback(name, oldValue, newValue) {
-                if (this.getAttribute('token') && this.getAttribute('org-id') && this.getAttribute('data-center')) {
-                    this.fetchVariables();
+        /**
+         * SUPERVISOR CONTROLS v2.2.0 (Adapted for GitHub Pages)
+         * Based on the logic from SupervisorControls.js
+         */
+        
+        (function() {
+            const template = document.createElement('template');
+            // Embedding styles directly from the source file 
+            template.innerHTML = `
+                <style>
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+                :host {
+                    display: block;
+                    font-family: 'Inter', 'CiscoSansTT Regular', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                    padding: 12px;
+                    background: transparent;
+                    --card-bg: rgba(255, 255, 255, 0.95);
+                    --card-border: #d5deeb;
+                    --card-text: #0f172a;
+                    --muted-text: #64748b;
+                    --chip-bg: #f1f5f9;
+                    --input-bg: #ffffff;
                 }
-            }
-
-            connectedCallback() {
-                this.renderBase();
-                if (this.getAttribute('token')) this.fetchVariables();
-                else this.querySelector('#variable-content').innerHTML = 'Waiting for authentication...';
-            }
-
-            async fetchVariables() {
-                const token = this.getAttribute('token');
-                const orgId = this.getAttribute('org-id');
-                const dc = this.getAttribute('data-center');
-                if (!token || !orgId || !dc) return;
-
-                // DIRECT API URL
-                const url = `https://api-${dc}.ciscoccservice.com/config/v1/organization/${orgId}/global-variables`;
-
-                try {
-                    const response = await fetch(url, { 
-                        method: 'GET',
-                        headers: { 
-                            'Authorization': `Bearer ${token}`,
-                            'Content-Type': 'application/json'
-                        } 
-                    });
-                    
-                    if (!response.ok) throw new Error(`API Error: ${response.status} ${response.statusText}`);
-                    
-                    this.variables = await response.json();
-                    this.renderVariables();
-                } catch (error) {
-                    console.error("Failed to fetch:", error);
-                    const msg = error.message.includes("Failed to fetch") 
-                        ? "Connection blocked. This is likely a CORS issue (Browser blocked the request)." 
-                        : error.message;
-                    this.querySelector('#variable-content').innerHTML = `<div style="color:red">Error: ${msg}</div>`;
+                :host(.theme-dark) {
+                    --card-bg: #1e293b;
+                    --card-border: #334155;
+                    --card-text: #f8fafc;
+                    --muted-text: #94a3b8;
+                    --chip-bg: #0f172a;
+                    --input-bg: #0f172a;
                 }
-            }
-
-            async updateVariable(id, newValue) {
-                const token = this.getAttribute('token');
-                const dc = this.getAttribute('data-center');
+                .container { width: 100%; box-sizing: border-box; }
                 
-                // DIRECT API URL
-                const url = `https://api-${dc}.ciscoccservice.com/config/v1/global-variables/${id}`;
-
-                try {
-                    const btn = this.querySelector(`#btn-${id}`);
-                    if(btn) { btn.innerText = "Saving..."; btn.disabled = true; }
-                    
-                    const response = await fetch(url, {
-                        method: 'PUT',
-                        headers: { 
-                            'Authorization': `Bearer ${token}`, 
-                            'Content-Type': 'application/json' 
-                        },
-                        body: JSON.stringify({ value: newValue })
-                    });
-
-                    if (!response.ok) throw new Error(`Update failed: ${response.status}`);
-                    alert("Variable updated successfully!");
-                } catch (error) {
-                    console.error(error);
-                    alert("Failed to update. Check console for CORS errors.");
-                } finally {
-                    const btn = this.querySelector(`#btn-${id}`);
-                    if(btn) { btn.innerText = "Save"; btn.disabled = false; }
+                .variables-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+                
+                .variable-card {
+                    background: var(--card-bg);
+                    border: 1px solid var(--card-border);
+                    border-radius: 12px;
+                    padding: 16px;
+                    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+                    display: flex;
+                    flex-direction: column;
+                    gap: 12px;
                 }
-            }
+                
+                .variable-header { display: flex; justify-content: space-between; align-items: flex-start; }
+                .variable-name { font-weight: 600; color: #007aa3; font-size: 15px; word-break: break-word; }
+                .variable-type-tag { font-size: 10px; text-transform: uppercase; background: var(--chip-bg); padding: 2px 6px; border-radius: 4px; color: var(--muted-text); }
+                
+                textarea {
+                    width: 100%;
+                    min-height: 80px;
+                    padding: 8px;
+                    border: 1px solid var(--card-border);
+                    border-radius: 6px;
+                    background: var(--input-bg);
+                    color: var(--card-text);
+                    font-family: inherit;
+                    box-sizing: border-box;
+                    resize: vertical;
+                }
+                
+                .switch-container { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--card-text); }
+                .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+                .switch input { opacity: 0; width: 0; height: 0; }
+                .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .2s; border-radius: 24px; }
+                .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; }
+                input:checked + .slider { background-color: #10b981; }
+                input:checked + .slider:before { transform: translateX(20px); }
+                
+                button.save-btn {
+                    background: #007aa3; color: white; border: none; padding: 8px 16px; 
+                    border-radius: 6px; cursor: pointer; font-weight: 600; align-self: flex-end;
+                    transition: background 0.2s;
+                }
+                button.save-btn:hover { background: #005f7a; }
+                button.save-btn:disabled { background: #cbd5e1; cursor: not-allowed; }
 
-            renderVariables() {
-                const container = this.querySelector('#variable-content');
-                container.innerHTML = '';
-                const groups = this.variables.reduce((acc, obj) => {
-                    const key = obj.type || 'OTHER';
-                    if (!acc[key]) acc[key] = [];
-                    acc[key].push(obj);
-                    return acc;
-                }, {});
+                .loading { text-align: center; padding: 40px; color: var(--muted-text); }
+                .spinner { border: 3px solid #f3f3f3; border-top: 3px solid #007aa3; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                
+                .message { padding: 10px; border-radius: 6px; margin-bottom: 10px; font-size: 14px; }
+                .message.error { background: #fee2e2; color: #991b1b; }
+                .message.success { background: #dcfce7; color: #166534; }
+                </style>
+                <div class="container">
+                    <div id="msg-area"></div>
+                    <div id="variablesContainer"></div>
+                </div>
+            `;
 
-                Object.keys(groups).forEach(type => {
-                    const section = document.createElement('div');
-                    section.className = 'group-section';
-                    section.innerHTML = `<h4 class="group-title">${type} VARIABLES</h4>`;
-                    groups[type].forEach(v => {
-                        const inputHtml = this.createInputHTML(v);
+            class GlobalVariableManager extends HTMLElement {
+                constructor() {
+                    super();
+                    this.attachShadow({ mode: 'open' });
+                    this.shadowRoot.appendChild(template.content.cloneNode(true));
+                    
+                    this.token = '';
+                    this.orgId = '';
+                    this.dataCenter = 'us1';
+                    this.autoLoad = true; // Default to true based on best practice 
+                    this.variables = [];
+                }
+
+                static get observedAttributes() {
+                    return ['token', 'org-id', 'data-center', 'theme', 'auto-load'];
+                }
+
+                attributeChangedCallback(name, oldValue, newValue) {
+                    if (name === 'token') this.token = newValue;
+                    if (name === 'org-id') this.orgId = newValue;
+                    if (name === 'data-center') this.dataCenter = newValue;
+                    if (name === 'theme') {
+                        if (newValue === 'dark') this.shadowRoot.host.classList.add('theme-dark');
+                        else this.shadowRoot.host.classList.remove('theme-dark');
+                    }
+                    // Trigger load if we have essentials
+                    if (this.token && this.orgId) this.scheduleLoad();
+                }
+
+                connectedCallback() {
+                    if (this.token && this.orgId) this.scheduleLoad();
+                }
+
+                scheduleLoad() {
+                    if (this._loadTimer) clearTimeout(this._loadTimer);
+                    this._loadTimer = setTimeout(() => this.loadVariables(), 100);
+                }
+
+                getApiUrl() {
+                    // Mapping logic from source 
+                    const dcMap = {
+                        'us1': 'https://api.wxcc-us1.cisco.com',
+                        'eu1': 'https://api.wxcc-eu1.cisco.com',
+                        'eu2': 'https://api.wxcc-eu2.cisco.com',
+                        'anz1': 'https://api.wxcc-anz1.cisco.com',
+                        'ca1': 'https://api.wxcc-ca1.cisco.com'
+                    };
+                    return dcMap[this.dataCenter] || dcMap['us1'];
+                }
+
+                async loadVariables() {
+                    const container = this.shadowRoot.getElementById('variablesContainer');
+                    container.innerHTML = '<div class="loading"><div class="spinner"></div>Loading variables...</div>';
+
+                    try {
+                        // 1. Fetch All Variables using v2 Pagination 
+                        const results = [];
+                        let page = 0;
+                        let totalPages = 1;
+                        const baseUrl = this.getApiUrl();
+
+                        while (page < totalPages) {
+                            const response = await fetch(`${baseUrl}/organization/${this.orgId}/v2/cad-variable?page=${page}&pageSize=100`, {
+                                headers: { 'Authorization': `Bearer ${this.token}`, 'Accept': 'application/json' }
+                            });
+                            
+                            if (!response.ok) throw new Error(`API Error: ${response.status}`);
+                            
+                            const data = await response.json();
+                            const items = Array.isArray(data.data) ? data.data : [];
+                            totalPages = (data.meta && data.meta.totalPages) ? data.meta.totalPages : 1;
+
+                            // Filter inactive items 
+                            items.forEach(item => {
+                                if (item.active !== false) results.push(item);
+                            });
+                            page++;
+                        }
+
+                        this.variables = results;
+                        this.render();
+                    } catch (error) {
+                        container.innerHTML = `<div class="message error">Error: ${error.message}</div>`;
+                    }
+                }
+
+                render() {
+                    const container = this.shadowRoot.getElementById('variablesContainer');
+                    container.innerHTML = '';
+                    
+                    if (this.variables.length === 0) {
+                        container.innerHTML = '<div style="text-align:center;color:var(--muted-text)">No global variables found.</div>';
+                        return;
+                    }
+
+                    const grid = document.createElement('div');
+                    grid.className = 'variables-grid';
+
+                    // sort: booleans first, then strings 
+                    this.variables.sort((a,b) => (a.variableType === 'BOOLEAN' ? -1 : 1));
+
+                    this.variables.forEach(v => {
                         const card = document.createElement('div');
                         card.className = 'variable-card';
-                        card.innerHTML = `<label class="var-label">${v.name}</label><div class="input-group">${inputHtml}<button id="btn-${v.id}" onclick="updateVar('${v.id}')">Save</button></div>`;
-                        section.appendChild(card);
-                    });
-                    container.appendChild(section);
-                });
-            }
+                        
+                        const isBool = (v.variableType === 'BOOLEAN');
+                        const val = v.defaultValue; // Using defaultValue as per API spec 
 
-            createInputHTML(variable) {
-                const type = (variable.type || '').toUpperCase();
-                if (type === 'BOOLEAN') {
-                    const isTrue = String(variable.value).toLowerCase() === 'true';
-                    return `<select id="input-${variable.id}"><option value="true" ${isTrue?'selected':''}>True</option><option value="false" ${!isTrue?'selected':''}>False</option></select>`;
-                } else {
-                    return `<input type="text" id="input-${variable.id}" value="${variable.value}" maxlength="${this.MAX_STRING_LENGTH}">`;
+                        // Header
+                        let html = `
+                            <div class="variable-header">
+                                <div class="variable-name">${v.name}</div>
+                                <div class="variable-type-tag">${v.variableType}</div>
+                            </div>
+                        `;
+
+                        // Input Area
+                        if (isBool) {
+                            const checked = (String(val).toLowerCase() === 'true');
+                            html += `
+                                <div class="switch-container">
+                                    <label class="switch">
+                                        <input type="checkbox" id="input-${v.id}" ${checked ? 'checked' : ''}>
+                                        <span class="slider"></span>
+                                    </label>
+                                    <span id="label-${v.id}">${checked ? 'True' : 'False'}</span>
+                                </div>
+                                <button class="save-btn" id="btn-${v.id}" style="display:none">Save</button>
+                            `;
+                        } else {
+                            html += `
+                                <textarea id="input-${v.id}">${val || ''}</textarea>
+                                <button class="save-btn" id="btn-${v.id}">Save</button>
+                            `;
+                        }
+
+                        card.innerHTML = html;
+                        grid.appendChild(card);
+
+                        // Event Listeners
+                        const input = card.querySelector(`#input-${v.id}`);
+                        const btn = card.querySelector(`#btn-${v.id}`);
+
+                        if (isBool) {
+                            input.addEventListener('change', () => {
+                                const isChecked = input.checked;
+                                card.querySelector(`#label-${v.id}`).innerText = isChecked ? 'True' : 'False';
+                                this.saveVariable(v, isChecked ? 'true' : 'false', btn);
+                            });
+                        } else {
+                            btn.addEventListener('click', () => {
+                                this.saveVariable(v, input.value, btn);
+                            });
+                        }
+                    });
+
+                    container.appendChild(grid);
+                }
+
+                async saveVariable(originalVar, newValue, btn) {
+                    btn.disabled = true;
+                    btn.innerText = 'Saving...';
+                    
+                    try {
+                        const baseUrl = this.getApiUrl();
+                        // Payload must include original properties 
+                        const payload = {
+                            ...originalVar,
+                            defaultValue: newValue
+                        };
+
+                        const response = await fetch(`${baseUrl}/organization/${this.orgId}/cad-variable/${originalVar.id}`, {
+                            method: 'PUT',
+                            headers: { 
+                                'Authorization': `Bearer ${this.token}`, 
+                                'Content-Type': 'application/json' 
+                            },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!response.ok) throw new Error(`Save failed: ${response.status}`);
+                        
+                        // Update local model
+                        originalVar.defaultValue = newValue;
+                        
+                        btn.innerText = 'Saved!';
+                        setTimeout(() => { 
+                            btn.innerText = 'Save'; 
+                            btn.disabled = false; 
+                        }, 2000);
+
+                    } catch (error) {
+                        alert(`Error saving: ${error.message}`);
+                        btn.innerText = 'Retry';
+                        btn.disabled = false;
+                    }
                 }
             }
 
-            renderBase() { this.innerHTML = `<div id="variable-content">Loading variables...</div>`; }
-        }
+            customElements.define('global-variable-manager', GlobalVariableManager);
+        })();
 
-        customElements.define('global-variable-manager', GlobalVariableManager);
-        window.updateVar = (id) => document.querySelector('global-variable-manager').updateVariable(id, document.getElementById(`input-${id}`).value);
-
-        // QUERY PARAMETER HANDLER
+        // --- GLUE CODE: Parse URL Parameters for GitHub Pages ---
         window.onload = function() {
             const params = new URLSearchParams(window.location.search);
-            const token = params.get('token');
-            const orgId = params.get('org-id');
-            const dc = params.get('data-center');
-            if(token && orgId && dc) {
-                const widget = document.getElementById('manager-widget');
-                widget.setAttribute('token', token);
-                widget.setAttribute('org-id', orgId);
-                widget.setAttribute('data-center', dc);
-            } else if (!window.frameElement && window.location.protocol !== 'file:') {
-                document.getElementById('error-msg').style.display = 'block';
-                document.getElementById('error-msg').innerText = "No tokens found in URL. This page expects to be loaded inside the Supervisor Desktop.";
+            const widget = document.getElementById('manager-widget');
+            
+            if (widget) {
+                // Pass attributes from URL to Component
+                if (params.has('token')) widget.setAttribute('token', params.get('token'));
+                if (params.has('org-id')) widget.setAttribute('org-id', params.get('org-id'));
+                if (params.has('data-center')) widget.setAttribute('data-center', params.get('data-center'));
+                
+                // Optional: Check for dark mode from Webex URL params (often passed as 'theme' or 'darkMode')
+                if (params.get('theme') === 'dark' || params.get('darkMode') === 'true') {
+                    widget.setAttribute('theme', 'dark');
+                }
             }
         };
     </script>
