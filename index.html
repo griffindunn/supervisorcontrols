@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supervisor Controls</title>
+    <link rel="stylesheet" href="https://momentum-ui.com/api/v1/momentum-ui.css">
+    <style>
+        body { font-family: 'CiscoSans', 'Segoe UI', sans-serif; padding: 20px; background-color: #f4f4f4; margin: 0; }
+        h3 { margin-top: 0; color: #333; }
+        .group-section { margin-bottom: 25px; border-left: 4px solid #007aa3; padding-left: 15px; background: rgba(255,255,255,0.5); padding: 10px 10px 10px 15px; border-radius: 0 4px 4px 0; }
+        .group-title { color: #555; margin: 0 0 10px 0; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; font-weight: 600; }
+        .variable-card { background: white; padding: 12px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .var-label { font-weight: 600; font-size: 14px; color: #222; }
+        .input-group { display: flex; gap: 10px; align-items: center; }
+        select, input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; width: 200px; }
+        button { background: #007aa3; color: white; border: none; padding: 7px 15px; border-radius: 18px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s; }
+        button:hover { background: #005f7a; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #error-msg { color: #d63d00; background: #ffebe6; padding: 10px; border-radius: 4px; display: none; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="app">
+        <h3>Supervisor Controls</h3>
+        <div id="error-msg"></div>
+        <global-variable-manager id="manager-widget"></global-variable-manager>
+    </div>
+
+    <script>
+        class GlobalVariableManager extends HTMLElement {
+            constructor() {
+                super();
+                this.variables = [];
+                this.MAX_STRING_LENGTH = 256; 
+            }
+
+            static get observedAttributes() { return ['token', 'org-id', 'data-center']; }
+
+            attributeChangedCallback(name, oldValue, newValue) {
+                if (this.getAttribute('token') && this.getAttribute('org-id') && this.getAttribute('data-center')) {
+                    this.fetchVariables();
+                }
+            }
+
+            connectedCallback() {
+                this.renderBase();
+                if (this.getAttribute('token')) this.fetchVariables();
+                else this.querySelector('#variable-content').innerHTML = 'Waiting for authentication...';
+            }
+
+            async fetchVariables() {
+                const token = this.getAttribute('token');
+                const orgId = this.getAttribute('org-id');
+                const dc = this.getAttribute('data-center');
+                if (!token || !orgId || !dc) return;
+
+                // DIRECT API URL
+                const url = `https://api-${dc}.ciscoccservice.com/config/v1/organization/${orgId}/global-variables`;
+
+                try {
+                    const response = await fetch(url, { 
+                        method: 'GET',
+                        headers: { 
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        } 
+                    });
+                    
+                    if (!response.ok) throw new Error(`API Error: ${response.status} ${response.statusText}`);
+                    
+                    this.variables = await response.json();
+                    this.renderVariables();
+                } catch (error) {
+                    console.error("Failed to fetch:", error);
+                    const msg = error.message.includes("Failed to fetch") 
+                        ? "Connection blocked. This is likely a CORS issue (Browser blocked the request)." 
+                        : error.message;
+                    this.querySelector('#variable-content').innerHTML = `<div style="color:red">Error: ${msg}</div>`;
+                }
+            }
+
+            async updateVariable(id, newValue) {
+                const token = this.getAttribute('token');
+                const dc = this.getAttribute('data-center');
+                
+                // DIRECT API URL
+                const url = `https://api-${dc}.ciscoccservice.com/config/v1/global-variables/${id}`;
+
+                try {
+                    const btn = this.querySelector(`#btn-${id}`);
+                    if(btn) { btn.innerText = "Saving..."; btn.disabled = true; }
+                    
+                    const response = await fetch(url, {
+                        method: 'PUT',
+                        headers: { 
+                            'Authorization': `Bearer ${token}`, 
+                            'Content-Type': 'application/json' 
+                        },
+                        body: JSON.stringify({ value: newValue })
+                    });
+
+                    if (!response.ok) throw new Error(`Update failed: ${response.status}`);
+                    alert("Variable updated successfully!");
+                } catch (error) {
+                    console.error(error);
+                    alert("Failed to update. Check console for CORS errors.");
+                } finally {
+                    const btn = this.querySelector(`#btn-${id}`);
+                    if(btn) { btn.innerText = "Save"; btn.disabled = false; }
+                }
+            }
+
+            renderVariables() {
+                const container = this.querySelector('#variable-content');
+                container.innerHTML = '';
+                const groups = this.variables.reduce((acc, obj) => {
+                    const key = obj.type || 'OTHER';
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(obj);
+                    return acc;
+                }, {});
+
+                Object.keys(groups).forEach(type => {
+                    const section = document.createElement('div');
+                    section.className = 'group-section';
+                    section.innerHTML = `<h4 class="group-title">${type} VARIABLES</h4>`;
+                    groups[type].forEach(v => {
+                        const inputHtml = this.createInputHTML(v);
+                        const card = document.createElement('div');
+                        card.className = 'variable-card';
+                        card.innerHTML = `<label class="var-label">${v.name}</label><div class="input-group">${inputHtml}<button id="btn-${v.id}" onclick="updateVar('${v.id}')">Save</button></div>`;
+                        section.appendChild(card);
+                    });
+                    container.appendChild(section);
+                });
+            }
+
+            createInputHTML(variable) {
+                const type = (variable.type || '').toUpperCase();
+                if (type === 'BOOLEAN') {
+                    const isTrue = String(variable.value).toLowerCase() === 'true';
+                    return `<select id="input-${variable.id}"><option value="true" ${isTrue?'selected':''}>True</option><option value="false" ${!isTrue?'selected':''}>False</option></select>`;
+                } else {
+                    return `<input type="text" id="input-${variable.id}" value="${variable.value}" maxlength="${this.MAX_STRING_LENGTH}">`;
+                }
+            }
+
+            renderBase() { this.innerHTML = `<div id="variable-content">Loading variables...</div>`; }
+        }
+
+        customElements.define('global-variable-manager', GlobalVariableManager);
+        window.updateVar = (id) => document.querySelector('global-variable-manager').updateVariable(id, document.getElementById(`input-${id}`).value);
+
+        // QUERY PARAMETER HANDLER
+        window.onload = function() {
+            const params = new URLSearchParams(window.location.search);
+            const token = params.get('token');
+            const orgId = params.get('org-id');
+            const dc = params.get('data-center');
+            if(token && orgId && dc) {
+                const widget = document.getElementById('manager-widget');
+                widget.setAttribute('token', token);
+                widget.setAttribute('org-id', orgId);
+                widget.setAttribute('data-center', dc);
+            } else if (!window.frameElement && window.location.protocol !== 'file:') {
+                document.getElementById('error-msg').style.display = 'block';
+                document.getElementById('error-msg').innerText = "No tokens found in URL. This page expects to be loaded inside the Supervisor Desktop.";
+            }
+        };
+    </script>
+</body>
+</html>
