@@ -1,9 +1,11 @@
 /**
- * Supervisor Global Variable Manager v2.8
- * Added: Manual Overrides for Org-ID and DC to bypass $STORE resolution issues.
+ * Supervisor Global Variable Manager v2.9
+ * Features: Auto-fallback for Org ID and Permissions Debugging.
  */
 
 (function() {
+  const DEFAULT_ORG_ID = '686ea2c9-9b30-4e89-aa5d-6156959ad4aa';
+
   const template = document.createElement('template');
   template.innerHTML = `
     <style>
@@ -21,6 +23,7 @@
       .error-box { background: #fee2e2; color: #b91c1c; padding: 15px; border-radius: 8px; border: 1px solid #f87171; margin-bottom: 15px; font-size: 13px; line-height: 1.5; }
       .config-row { display: flex; gap: 10px; margin-top: 10px; }
       .config-row input { flex: 1; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; }
+      .badge { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
     </style>
     
     <div class="auth-panel">
@@ -30,15 +33,18 @@
         <label><input type="radio" name="authMode" value="manual"> Developer Mode</label>
       </div>
       
-      <div id="manualConfig" style="display: none; margin-top: 10px; border-top: 1px solid #eee; pt: 10px;">
+      <div id="manualConfig" style="display: none; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px;">
         <div class="config-row">
           <input type="text" id="manualTokenInput" placeholder="Bearer Token">
         </div>
         <div class="config-row">
-          <input type="text" id="manualOrgInput" placeholder="Org ID (Numeric)">
+          <input type="text" id="manualOrgInput" placeholder="Org ID (Blank for Default)">
           <input type="text" id="manualDcInput" placeholder="DC (e.g., us1)">
         </div>
         <button class="btn btn-primary" id="applyManual">Apply & Connect</button>
+      </div>
+      <div style="margin-top:10px; font-size:11px; color:#64748b;">
+        Current Org ID: <span id="activeOrgBadge" class="badge">None</span>
       </div>
     </div>
 
@@ -68,9 +74,10 @@
 
       this.shadowRoot.getElementById('applyManual').addEventListener('click', () => {
         this.activeToken = this.shadowRoot.getElementById('manualTokenInput').value.trim();
-        this.orgId = this.shadowRoot.getElementById('manualOrgInput').value.trim();
+        const mOrg = this.shadowRoot.getElementById('manualOrgInput').value.trim();
+        this.orgId = (mOrg && mOrg !== "") ? mOrg : DEFAULT_ORG_ID;
         this.dc = this.shadowRoot.getElementById('manualDcInput').value.trim() || 'us1';
-        if (this.activeToken && this.orgId) this.loadVariables();
+        this.loadVariables();
       });
     }
 
@@ -78,12 +85,20 @@
       if (this.shadowRoot.querySelector('input[name="authMode"]:checked')?.value !== 'auto') return;
 
       const t = this.getAttribute('token'), o = this.getAttribute('org-id'), d = this.getAttribute('data-center');
+      
       this.activeToken = (t && !t.includes('$')) ? t : '';
-      this.orgId = (o && !o.includes('$')) ? o : '';
+      
+      // Default to DEFAULT_ORG_ID if attribute is missing, empty, or an unresolved placeholder
+      this.orgId = (o && !o.includes('$') && o !== "") ? o : DEFAULT_ORG_ID;
       this.dc = (d && !d.includes('$')) ? d : 'us1';
 
-      if (this.activeToken && this.orgId) this.loadVariables();
-      else this.showStatus('Waiting for Webex Desktop to provide Org ID and Token...', 'info');
+      this.shadowRoot.getElementById('activeOrgBadge').textContent = this.orgId;
+
+      if (this.activeToken && this.orgId) {
+        this.loadVariables();
+      } else {
+        this.showStatus('Waiting for System Token...', 'info');
+      }
     }
 
     showStatus(msg, type) {
@@ -91,24 +106,30 @@
       if (type === 'error') {
         const is403 = msg.includes('403');
         statusArea.innerHTML = `<div class="error-box">
-          ${is403 ? '<strong>Permission Denied (403):</strong> Your Supervisor profile lacks "Global Variables" access in Control Hub.' : '<strong>Error:</strong> ' + msg}
+          ${is403 ? '<strong>Permission Denied (403):</strong> Your Supervisor profile lacks "Global Variables" access in Control Hub. Please contact your administrator.' : '<strong>Error:</strong> ' + msg}
         </div>`;
-      } else { statusArea.innerHTML = `<div style="padding:10px; font-style:italic; color:#64748b;">${msg}</div>`; }
+      } else { 
+        statusArea.innerHTML = `<div style="padding:10px; font-style:italic; color:#64748b;">${msg}</div>`; 
+      }
     }
 
     async loadVariables() {
       const loader = this.shadowRoot.getElementById('loader'), container = this.shadowRoot.getElementById('container');
       this.shadowRoot.getElementById('statusArea').innerHTML = '';
       loader.style.display = 'block'; container.innerHTML = '';
+      this.shadowRoot.getElementById('activeOrgBadge').textContent = this.orgId;
 
       try {
-        const response = await fetch(`https://api.wxcc-${this.dc}.cisco.com/organization/${this.orgId}/v2/cad-variable?page=0&pageSize=100`, {
+        const url = `https://api.wxcc-${this.dc}.cisco.com/organization/${this.orgId}/v2/cad-variable?page=0&pageSize=100`;
+        const response = await fetch(url, {
           headers: { 'Authorization': `Bearer ${this.activeToken}`, 'Accept': 'application/json' }
         });
         if (!response.ok) throw new Error(JSON.stringify(await response.json()));
         const result = await response.json();
         this.variables = (result.data || []).filter(v => v.active !== false);
-        loader.style.display = 'none'; this.render();
+        loader.style.display = 'none'; 
+        if (this.variables.length === 0) this.showStatus('No active global variables found.', 'info');
+        else this.render();
       } catch (err) {
         loader.style.display = 'none'; this.showStatus(err.message, 'error');
       }
