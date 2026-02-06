@@ -1,6 +1,6 @@
 /**
- * Supervisor Global Variable Manager v2.6
- * DEBUG MODE ENABLED
+ * Supervisor Global Variable Manager v2.7
+ * Fixes: $STORE string literal bug and 403 Permission guidance.
  */
 
 (function() {
@@ -47,7 +47,6 @@
         border-radius: 6px;
         font-size: 13px;
         box-sizing: border-box;
-        background: #fdfdfd;
       }
       .btn {
         cursor: pointer;
@@ -64,13 +63,12 @@
       .error-box { 
         background: #fee2e2; 
         color: #b91c1c; 
-        padding: 12px; 
+        padding: 15px; 
         border-radius: 8px; 
         border: 1px solid #f87171;
         margin-bottom: 15px;
         font-size: 13px;
-        word-break: break-all;
-        white-space: pre-wrap;
+        line-height: 1.5;
       }
       .debug-log {
         background: #1e293b;
@@ -109,29 +107,23 @@
       this.attachShadow({ mode: 'open' }).appendChild(template.content.cloneNode(true));
       this.variables = [];
       this.activeToken = '';
-      this.debugEnabled = true;
     }
 
     static get observedAttributes() { return ['token', 'org-id', 'data-center']; }
 
     log(msg, data = '') {
-      if (!this.debugEnabled) return;
       const timestamp = new Date().toLocaleTimeString();
-      console.log(`[GVM-DEBUG] ${timestamp}: ${msg}`, data);
       const debugArea = this.shadowRoot.getElementById('debugArea');
       debugArea.style.display = 'block';
       debugArea.innerHTML += `<div>[${timestamp}] ${msg} ${data ? JSON.stringify(data) : ''}</div>`;
       debugArea.scrollTop = debugArea.scrollHeight;
     }
 
-    attributeChangedCallback(name, oldVal, newVal) { 
-      this.log(`Attribute changed: ${name}`, { old: oldVal, new: newVal });
-      const mode = this.shadowRoot.querySelector('input[name="authMode"]:checked')?.value;
-      if (mode === 'auto') this.startSession(); 
+    attributeChangedCallback() { 
+      this.startSession(); 
     }
 
     connectedCallback() {
-      this.log('Component connected to DOM');
       this.setupEventListeners();
       this.startSession();
     }
@@ -142,30 +134,34 @@
       
       radios.forEach(r => {
         r.addEventListener('change', (e) => {
-          this.log(`Auth mode changed to: ${e.target.value}`);
           manualContainer.style.display = e.target.value === 'manual' ? 'block' : 'none';
           if (e.target.value === 'auto') this.startSession();
         });
       });
 
       this.shadowRoot.getElementById('applyManualToken').addEventListener('click', () => {
-        const input = this.shadowRoot.getElementById('manualTokenInput').value.trim();
-        this.log('Manual token applied', input ? 'Token length: ' + input.length : 'Empty input');
-        this.activeToken = input;
+        this.activeToken = this.shadowRoot.getElementById('manualTokenInput').value.trim();
         if (this.activeToken) this.loadVariables();
       });
     }
 
     startSession() {
-      this.activeToken = this.getAttribute('token');
-      this.orgId = this.getAttribute('org-id');
-      this.dc = this.getAttribute('data-center') || 'us1';
-      this.log('Starting session with attributes', { orgId: this.orgId, dc: this.dc, hasToken: !!this.activeToken });
-      
+      const mode = this.shadowRoot.querySelector('input[name="authMode"]:checked')?.value;
+      if (mode !== 'auto') return;
+
+      // SANitization: Block $STORE placeholders from being used as real IDs
+      const rawToken = this.getAttribute('token');
+      const rawOrg = this.getAttribute('org-id');
+      const rawDc = this.getAttribute('data-center');
+
+      this.activeToken = (rawToken && !rawToken.startsWith('$')) ? rawToken : '';
+      this.orgId = (rawOrg && !rawOrg.startsWith('$')) ? rawOrg : '';
+      this.dc = (rawDc && !rawDc.startsWith('$')) ? rawDc : 'us1';
+
       if (this.activeToken && this.orgId) {
         this.loadVariables();
       } else {
-        this.showStatus('Waiting for Desktop attributes (token/org-id)...', 'info');
+        this.showStatus('Waiting for Desktop to resolve $STORE variables...', 'info');
       }
     }
 
@@ -174,16 +170,13 @@
     showStatus(msg, type) {
       const statusArea = this.shadowRoot.getElementById('statusArea');
       if (type === 'error') {
-        let displayMsg = msg;
-        if (typeof msg === 'object') {
-          try {
-            displayMsg = JSON.stringify(msg, null, 2);
-          } catch (e) {
-            displayMsg = 'Unknown Error Object';
-          }
+        let helpText = "An error occurred.";
+        if (msg.includes('403')) {
+          helpText = "<strong>403 Forbidden:</strong> Your user account does not have permission to view Global Variables. Please contact your Webex Admin to update your Supervisor Profile.";
+        } else if (msg.includes('401')) {
+          helpText = "<strong>401 Unauthorized:</strong> The token has expired or is invalid.";
         }
-        this.log('Showing Error Status', displayMsg);
-        statusArea.innerHTML = `<div class="error-box"><strong>Error Encountered:</strong><br>${displayMsg}</div>`;
+        statusArea.innerHTML = `<div class="error-box">${helpText}<br><br><small>${msg}</small></div>`;
       } else {
         statusArea.innerHTML = `<div style="padding:10px; font-style:italic; color:#64748b;">${msg}</div>`;
       }
@@ -196,72 +189,46 @@
       loader.style.display = 'block';
       container.innerHTML = '';
 
-      const url = `${this.getApiUrl()}/v2/cad-variable?page=0&pageSize=100`;
-      this.log(`Fetching variables from: ${url}`);
-
       try {
-        const response = await fetch(url, {
+        const response = await fetch(`${this.getApiUrl()}/v2/cad-variable?page=0&pageSize=100`, {
           method: 'GET',
-          mode: 'cors',
           headers: { 
             'Authorization': `Bearer ${this.activeToken}`,
             'Accept': 'application/json'
           }
         });
         
-        this.log(`Response received. Status: ${response.status} ${response.statusText}`);
-        
         if (!response.ok) {
            const errData = await response.json().catch(() => ({}));
-           this.log('Error data from API:', errData);
-           throw new Error(JSON.stringify(errData) || `HTTP Error ${response.status}`);
+           throw new Error(JSON.stringify(errData) || `HTTP ${response.status}`);
         }
         
         const result = await response.json();
         this.variables = (result.data || []).filter(v => v.active !== false);
-        this.log(`Successfully parsed ${this.variables.length} active variables.`);
-        
         loader.style.display = 'none';
         this.render();
       } catch (err) {
         loader.style.display = 'none';
-        this.log('Fetch exception caught', err.toString());
-        
-        if (err.message.includes('Failed to fetch')) {
-          this.showStatus('Failed to Fetch: This is likely a CORS block. Ensure the API allows requests from your current domain.', 'error');
-        } else {
-          this.showStatus(err.message, 'error');
-        }
+        this.showStatus(err.message, 'error');
       }
     }
 
     async updateVariable(id, newValue, btn) {
-      this.log(`Attempting update for variable ${id} with value: ${newValue}`);
       btn.textContent = 'Saving...';
       const variable = this.variables.find(v => v.id === id);
-      const payload = { ...variable, defaultValue: newValue };
-
       try {
         const res = await fetch(`${this.getApiUrl()}/cad-variable/${id}`, {
           method: 'PUT',
-          mode: 'cors',
           headers: {
             'Authorization': `Bearer ${this.activeToken}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({ ...variable, defaultValue: newValue })
         });
-
-        this.log(`Update response status: ${res.status}`);
-        if (!res.ok) {
-            const errData = await res.json().catch(() => ({}));
-            throw new Error(JSON.stringify(errData));
-        }
-
+        if (!res.ok) throw new Error(`Status ${res.status}`);
         btn.textContent = '✓ Saved';
         setTimeout(() => { btn.textContent = 'Update Value'; }, 2000);
       } catch (err) {
-        this.log('Update exception', err.toString());
         btn.textContent = 'Retry?';
         this.showStatus(err.message, 'error');
       }
