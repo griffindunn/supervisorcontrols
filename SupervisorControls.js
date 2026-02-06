@@ -1,6 +1,6 @@
 /**
- * Supervisor Global Variable Manager v2.5
- * Fixes: CORS "Failed to fetch" and [object Object] error parsing.
+ * Supervisor Global Variable Manager v2.6
+ * DEBUG MODE ENABLED
  */
 
 (function() {
@@ -40,13 +40,14 @@
       .name { font-weight: 700; color: #049fd9; font-size: 14px; }
       .type-tag { font-size: 10px; background: #f1f5f9; padding: 2px 8px; border-radius: 10px; text-transform: uppercase; }
       
-      textarea, input[type="text"] {
+      textarea {
         width: 100%;
         padding: 8px;
         border: 1px solid #cbd5e1;
         border-radius: 6px;
         font-size: 13px;
         box-sizing: border-box;
+        background: #fdfdfd;
       }
       .btn {
         cursor: pointer;
@@ -69,6 +70,18 @@
         margin-bottom: 15px;
         font-size: 13px;
         word-break: break-all;
+        white-space: pre-wrap;
+      }
+      .debug-log {
+        background: #1e293b;
+        color: #34d399;
+        font-family: monospace;
+        padding: 10px;
+        font-size: 11px;
+        border-radius: 4px;
+        margin-bottom: 10px;
+        max-height: 150px;
+        overflow-y: auto;
       }
     </style>
     
@@ -84,8 +97,9 @@
       </div>
     </div>
 
+    <div id="debugArea" class="debug-log" style="display:none;"></div>
     <div id="statusArea"></div>
-    <div id="loader" style="text-align:center; padding: 20px; display:none;">Loading...</div>
+    <div id="loader" style="text-align:center; padding: 20px; display:none;">Loading Global Variables...</div>
     <div id="container" class="grid"></div>
   `;
 
@@ -95,16 +109,29 @@
       this.attachShadow({ mode: 'open' }).appendChild(template.content.cloneNode(true));
       this.variables = [];
       this.activeToken = '';
+      this.debugEnabled = true;
     }
 
     static get observedAttributes() { return ['token', 'org-id', 'data-center']; }
 
-    attributeChangedCallback() { 
+    log(msg, data = '') {
+      if (!this.debugEnabled) return;
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[GVM-DEBUG] ${timestamp}: ${msg}`, data);
+      const debugArea = this.shadowRoot.getElementById('debugArea');
+      debugArea.style.display = 'block';
+      debugArea.innerHTML += `<div>[${timestamp}] ${msg} ${data ? JSON.stringify(data) : ''}</div>`;
+      debugArea.scrollTop = debugArea.scrollHeight;
+    }
+
+    attributeChangedCallback(name, oldVal, newVal) { 
+      this.log(`Attribute changed: ${name}`, { old: oldVal, new: newVal });
       const mode = this.shadowRoot.querySelector('input[name="authMode"]:checked')?.value;
       if (mode === 'auto') this.startSession(); 
     }
 
     connectedCallback() {
+      this.log('Component connected to DOM');
       this.setupEventListeners();
       this.startSession();
     }
@@ -115,13 +142,16 @@
       
       radios.forEach(r => {
         r.addEventListener('change', (e) => {
+          this.log(`Auth mode changed to: ${e.target.value}`);
           manualContainer.style.display = e.target.value === 'manual' ? 'block' : 'none';
           if (e.target.value === 'auto') this.startSession();
         });
       });
 
       this.shadowRoot.getElementById('applyManualToken').addEventListener('click', () => {
-        this.activeToken = this.shadowRoot.getElementById('manualTokenInput').value.trim();
+        const input = this.shadowRoot.getElementById('manualTokenInput').value.trim();
+        this.log('Manual token applied', input ? 'Token length: ' + input.length : 'Empty input');
+        this.activeToken = input;
         if (this.activeToken) this.loadVariables();
       });
     }
@@ -130,7 +160,13 @@
       this.activeToken = this.getAttribute('token');
       this.orgId = this.getAttribute('org-id');
       this.dc = this.getAttribute('data-center') || 'us1';
-      if (this.activeToken && this.orgId) this.loadVariables();
+      this.log('Starting session with attributes', { orgId: this.orgId, dc: this.dc, hasToken: !!this.activeToken });
+      
+      if (this.activeToken && this.orgId) {
+        this.loadVariables();
+      } else {
+        this.showStatus('Waiting for Desktop attributes (token/org-id)...', 'info');
+      }
     }
 
     getApiUrl() { return `https://api.wxcc-${this.dc}.cisco.com/organization/${this.orgId}`; }
@@ -138,9 +174,16 @@
     showStatus(msg, type) {
       const statusArea = this.shadowRoot.getElementById('statusArea');
       if (type === 'error') {
-        // If msg is an object, stringify it so it doesn't show as [object Object]
-        const cleanMsg = typeof msg === 'object' ? JSON.stringify(msg) : msg;
-        statusArea.innerHTML = `<div class="error-box"><strong>API Error:</strong> ${cleanMsg}</div>`;
+        let displayMsg = msg;
+        if (typeof msg === 'object') {
+          try {
+            displayMsg = JSON.stringify(msg, null, 2);
+          } catch (e) {
+            displayMsg = 'Unknown Error Object';
+          }
+        }
+        this.log('Showing Error Status', displayMsg);
+        statusArea.innerHTML = `<div class="error-box"><strong>Error Encountered:</strong><br>${displayMsg}</div>`;
       } else {
         statusArea.innerHTML = `<div style="padding:10px; font-style:italic; color:#64748b;">${msg}</div>`;
       }
@@ -153,8 +196,11 @@
       loader.style.display = 'block';
       container.innerHTML = '';
 
+      const url = `${this.getApiUrl()}/v2/cad-variable?page=0&pageSize=100`;
+      this.log(`Fetching variables from: ${url}`);
+
       try {
-        const response = await fetch(`${this.getApiUrl()}/v2/cad-variable?page=0&pageSize=100`, {
+        const response = await fetch(url, {
           method: 'GET',
           mode: 'cors',
           headers: { 
@@ -163,22 +209,34 @@
           }
         });
         
+        this.log(`Response received. Status: ${response.status} ${response.statusText}`);
+        
         if (!response.ok) {
            const errData = await response.json().catch(() => ({}));
-           throw new Error(errData?.error?.message || errData?.message || `HTTP ${response.status}`);
+           this.log('Error data from API:', errData);
+           throw new Error(JSON.stringify(errData) || `HTTP Error ${response.status}`);
         }
         
         const result = await response.json();
         this.variables = (result.data || []).filter(v => v.active !== false);
+        this.log(`Successfully parsed ${this.variables.length} active variables.`);
+        
         loader.style.display = 'none';
         this.render();
       } catch (err) {
         loader.style.display = 'none';
-        this.showStatus(err.message === 'Failed to fetch' ? 'Failed to fetch (Check CORS or Internet)' : err.message, 'error');
+        this.log('Fetch exception caught', err.toString());
+        
+        if (err.message.includes('Failed to fetch')) {
+          this.showStatus('Failed to Fetch: This is likely a CORS block. Ensure the API allows requests from your current domain.', 'error');
+        } else {
+          this.showStatus(err.message, 'error');
+        }
       }
     }
 
     async updateVariable(id, newValue, btn) {
+      this.log(`Attempting update for variable ${id} with value: ${newValue}`);
       btn.textContent = 'Saving...';
       const variable = this.variables.find(v => v.id === id);
       const payload = { ...variable, defaultValue: newValue };
@@ -194,12 +252,18 @@
           body: JSON.stringify(payload)
         });
 
-        if (!res.ok) throw new Error(`Status ${res.status}`);
+        this.log(`Update response status: ${res.status}`);
+        if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(JSON.stringify(errData));
+        }
+
         btn.textContent = '✓ Saved';
         setTimeout(() => { btn.textContent = 'Update Value'; }, 2000);
       } catch (err) {
+        this.log('Update exception', err.toString());
         btn.textContent = 'Retry?';
-        this.showStatus(`Update failed: ${err.message}`, 'error');
+        this.showStatus(err.message, 'error');
       }
     }
 
