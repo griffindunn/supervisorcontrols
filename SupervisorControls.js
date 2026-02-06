@@ -1,6 +1,6 @@
 /**
- * Supervisor Global Variable Manager v2.3
- * Added: Dual-Authentication Toggle (Auto Access Token vs. Manual Bearer Token)
+ * Supervisor Global Variable Manager v2.4
+ * Hardened Render Cycle: UI displays immediately even if API fails.
  */
 
 (function() {
@@ -22,6 +22,7 @@
         padding: 12px;
         margin-bottom: 20px;
         font-size: 13px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
       }
       .grid {
         display: grid;
@@ -72,7 +73,15 @@
       input:checked + .slider { background-color: #10b981; }
       input:checked + .slider:before { transform: translateX(18px); }
       
-      .error { color: #ef4444; margin-top: 5px; font-size: 12px; }
+      .error-box { 
+        background: #fee2e2; 
+        color: #b91c1c; 
+        padding: 12px; 
+        border-radius: 8px; 
+        border: 1px solid #f87171;
+        margin-bottom: 15px;
+        font-size: 13px;
+      }
     </style>
     
     <div class="auth-panel">
@@ -82,12 +91,13 @@
         <label><input type="radio" name="authMode" value="manual"> Manual Bearer Token</label>
       </div>
       <div id="manualTokenContainer" style="display: none; margin-top: 10px;">
-        <input type="text" id="manualTokenInput" placeholder="Paste Bearer Token here...">
+        <input type="text" id="manualTokenInput" placeholder="Paste Bearer Token (e.g. Personal Access Token)">
         <button class="btn btn-primary" id="applyManualToken">Connect with Token</button>
       </div>
     </div>
 
-    <div id="loader" style="text-align:center; padding: 20px;">Fetching Global Variables...</div>
+    <div id="statusArea"></div>
+    <div id="loader" style="text-align:center; padding: 20px; display:none;">Loading Variables...</div>
     <div id="container" class="grid"></div>
   `;
 
@@ -104,10 +114,17 @@
     }
 
     attributeChangedCallback() {
-      this.init();
+      // Re-trigger load if attributes update while manual mode is OFF
+      const mode = this.shadowRoot.querySelector('input[name="authMode"]:checked')?.value;
+      if (mode === 'auto') this.startSession();
     }
 
     connectedCallback() {
+      this.setupEventListeners();
+      this.startSession();
+    }
+
+    setupEventListeners() {
       const radios = this.shadowRoot.querySelectorAll('input[name="authMode"]');
       const manualContainer = this.shadowRoot.getElementById('manualTokenContainer');
       
@@ -117,8 +134,7 @@
             manualContainer.style.display = 'block';
           } else {
             manualContainer.style.display = 'none';
-            this.activeToken = this.getAttribute('token');
-            this.loadVariables();
+            this.startSession();
           }
         });
       });
@@ -132,8 +148,8 @@
       });
     }
 
-    async init() {
-      const mode = this.shadowRoot.querySelector('input[name="authMode"]:checked').value;
+    startSession() {
+      const mode = this.shadowRoot.querySelector('input[name="authMode"]:checked')?.value || 'auto';
       if (mode === 'auto') {
         this.activeToken = this.getAttribute('token');
       }
@@ -141,7 +157,9 @@
       this.dc = this.getAttribute('data-center') || 'us1';
 
       if (this.activeToken && this.orgId) {
-        await this.loadVariables();
+        this.loadVariables();
+      } else {
+        this.showStatus('Waiting for credentials from Webex Desktop...', 'info');
       }
     }
 
@@ -149,11 +167,22 @@
       return `https://api.wxcc-${this.dc}.cisco.com/organization/${this.orgId}`;
     }
 
+    showStatus(msg, type) {
+      const statusArea = this.shadowRoot.getElementById('statusArea');
+      if (type === 'error') {
+        statusArea.innerHTML = `<div class="error-box"><strong>Error:</strong> ${msg}</div>`;
+      } else {
+        statusArea.innerHTML = `<div style="padding:10px; font-style:italic; color:#64748b;">${msg}</div>`;
+      }
+    }
+
     async loadVariables() {
       const loader = this.shadowRoot.getElementById('loader');
       const container = this.shadowRoot.getElementById('container');
+      const statusArea = this.shadowRoot.getElementById('statusArea');
+      
+      statusArea.innerHTML = '';
       loader.style.display = 'block';
-      loader.textContent = 'Loading...';
       container.innerHTML = '';
 
       try {
@@ -161,13 +190,23 @@
           headers: { 'Authorization': `Bearer ${this.activeToken}` }
         });
         
-        if (!response.ok) throw new Error(`Status: ${response.status}`);
+        if (!response.ok) {
+           const errData = await response.json().catch(() => ({}));
+           throw new Error(errData?.error?.message || `HTTP ${response.status}`);
+        }
         
         const result = await response.json();
         this.variables = result.data.filter(v => v.active !== false);
-        this.render();
+        
+        loader.style.display = 'none';
+        if (this.variables.length === 0) {
+          this.showStatus('No active global variables found for this tenant.', 'info');
+        } else {
+          this.render();
+        }
       } catch (err) {
-        loader.innerHTML = `<span class="error">Failed to load variables. Error: ${err.message}</span>`;
+        loader.style.display = 'none';
+        this.showStatus(err.message, 'error');
       }
     }
 
@@ -190,14 +229,15 @@
         btn.textContent = '✓ Saved';
         setTimeout(() => { btn.textContent = 'Update Value'; }, 2000);
       } catch (err) {
-        btn.textContent = 'Error';
+        btn.textContent = 'Retry?';
+        this.showStatus('Update failed. Check your token permissions.', 'error');
         setTimeout(() => { btn.textContent = 'Update Value'; }, 3000);
       }
     }
 
     render() {
       const container = this.shadowRoot.getElementById('container');
-      this.shadowRoot.getElementById('loader').style.display = 'none';
+      container.innerHTML = '';
 
       this.variables.forEach(v => {
         const isBool = v.variableType?.toLowerCase() === 'boolean';
